@@ -1,6 +1,6 @@
-# Primitive Store build
+# PrimitiveOS release tools
 
-The shared release pipeline for Primitive Store apps: one reusable GitHub workflow and the packager it calls.
+The shared release pipeline for PrimitiveOS apps uses one reusable GitHub workflow and a common packager.
 
 - `.github/workflows/package.yml`: on a `v*` tag of an app, tests the app, builds it for each architecture, stages the
   installed files, packages them, and publishes the release with the zips and their `.sha256` files.

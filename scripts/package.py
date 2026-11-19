@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package one architecture of a Primitive Store app: a zip, its .sha256, and the manifest inside it.
+"""Package one architecture of a PrimitiveOS app with its manifest and SHA-256 file.
 
     python3 package.py --id primitive-notes --dir notes --version 0.1.0 --arch armhf \\
         --stage build/stage --license LICENSE --install INSTALL.md --out dist
