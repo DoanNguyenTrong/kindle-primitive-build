@@ -41,3 +41,8 @@ python3 scripts/package.py --id primitive-notes --dir notes --version 0.1.0 --ar
 The launcher's `kl-store` crate reads these packages in its tests (`KL_TEST_PACKAGE=dist/<zip> cargo test -p kl-store`).
 
 Release workflows should pin an approved workflow revision. The reusable workflow checks out its packager at that same revision.
+
+## Licence
+
+The project-owned packaging scripts, workflows, and manifest schema are licensed under
+[PolyForm Noncommercial 1.0.0](LICENSE). Each app package carries its app's own licences.
