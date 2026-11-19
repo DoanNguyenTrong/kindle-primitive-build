@@ -148,6 +148,8 @@ def main(argv):
             raise SystemExit(f"{f} is outside the places an app may use ({args.dir}/, documents/, extensions/{args.dir}/)")
     installed = [f for f in files if not f.startswith("hooks/")]
     hooks = [f for f in files if f.startswith("hooks/")]
+    if "hooks/post-install.sh" in hooks and "hooks/pre-uninstall.sh" not in hooks:
+        raise SystemExit("Add hooks/pre-uninstall.sh to undo the changes made by hooks/post-install.sh")
 
     requires = {}
     for item in args.requires:
