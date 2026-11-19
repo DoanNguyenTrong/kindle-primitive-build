@@ -64,27 +64,53 @@ def write_file(archive, name, source, executable=False):
         shutil.copyfileobj(src, dest)
 
 
-def scan(files, manifest_json):
+def scan_patterns():
     try:
-        patterns = [
+        return [
             re.compile(pattern.encode())
             for pattern in os.environ.get("PACKAGE_SCAN_PATTERNS", "").splitlines()
             if pattern
         ]
     except re.error:
         raise SystemExit("an invalid secret scan expression was configured") from None
+
+
+def scan_entry(patterns, name, contents):
     for pattern in patterns:
-        if pattern.search(manifest_json):
+        if pattern.search(contents) or pattern.search(name.encode()):
             raise SystemExit("a configured secret scan expression matched a package entry")
+
+
+def scan_stage(files, manifest_json):
+    patterns = scan_patterns()
+    scan_entry(patterns, "manifest.json", manifest_json)
     if patterns:
         for name, source, _ in files:
             with open(source, "rb") as data:
-                contents = data.read(MAX_PACKAGE_BYTES + 1)
-            if any(pattern.search(contents) or pattern.search(name.encode()) for pattern in patterns):
-                raise SystemExit("a configured secret scan expression matched a package entry")
+                scan_entry(patterns, name, data.read(MAX_PACKAGE_BYTES + 1))
+
+
+def scan_archives(paths):
+    patterns = scan_patterns()
+    if not patterns:
+        return
+    for path in paths:
+        with zipfile.ZipFile(path) as archive:
+            entries = archive.infolist()
+            if len(entries) > MAX_FILES or sum(entry.file_size for entry in entries) > MAX_PACKAGE_BYTES:
+                raise SystemExit("an archive exceeds the package scan limits")
+            for entry in entries:
+                with archive.open(entry) as contents:
+                    scan_entry(patterns, entry.filename, contents.read(MAX_PACKAGE_BYTES + 1))
 
 
 def main(argv):
+    if argv[:1] == ["--scan-archive"]:
+        if len(argv) < 2:
+            raise SystemExit("specify ZIP archives to scan")
+        scan_archives(argv[1:])
+        return 0
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--id", required=True)
     ap.add_argument("--dir", required=True)
@@ -100,8 +126,12 @@ def main(argv):
     ap.add_argument("--out", required=True)
     args = ap.parse_args(argv)
 
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,39}", args.id):
+        raise SystemExit("id must use lower-case letters, digits or hyphens")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", args.dir) or args.dir in RESERVED:
         raise SystemExit("dir must be an unreserved app folder")
+    if not re.fullmatch(r"[0-9]+(\.[0-9]+){1,2}(-p[0-9]+)?", args.version):
+        raise SystemExit("version must look like 1.2.3, 2026.10, or 2.6-p1")
     if not re.fullmatch(r"[0-9]+(\.[0-9]+)+", args.firmware_min):
         raise SystemExit("the minimum firmware must be a dotted version")
     files = stage_files(args.stage)
@@ -164,7 +194,7 @@ def main(argv):
         raise SystemExit(f"the package has more than {MAX_FILES} entries")
     if len(manifest_json) + sum(os.path.getsize(source) for _, source, _ in metadata) > MAX_PACKAGE_BYTES:
         raise SystemExit(f"the package is larger than {MAX_PACKAGE_BYTES} bytes before compression")
-    scan(metadata, manifest_json)
+    scan_stage(metadata, manifest_json)
 
     os.makedirs(args.out, exist_ok=True)
     zip_path = os.path.join(args.out, name)

@@ -28,6 +28,7 @@ developer's computer.
 To scan archives in CI, pass the caller's `PACKAGE_SCAN_PATTERNS` secret as `package-scan-patterns`. Each nonempty line is
 a regular expression applied to staged names, contents and the manifest. The packager reports only that a match occurred.
 For a local scan set the `PACKAGE_SCAN_PATTERNS` environment variable before running the packager.
+Use `python3 scripts/package.py --scan-archive dist/*.zip` to scan archives that already exist.
 
 ## Check it locally
 
