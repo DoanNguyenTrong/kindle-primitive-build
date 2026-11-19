@@ -1,0 +1,86 @@
+# The shared release workflow for Primitive Store apps. An app calls it on a `v*` tag:
+#
+#   on: { push: { tags: ["v*"] } }
+#   jobs:
+#     release:
+#       uses: DoanNguyenTrong/kindle-primitive-build/.github/workflows/package.yml@v1
+#       with: { id: primitive-notes, dir: notes, binary-crate: kn-kindle, arches: armhf }
+#       permissions: { contents: write }
+#
+# The app's own scripts/stage.sh must put the installed files in build/stage (see the build repo's README). The tag must
+# equal the version in Cargo.toml. Nothing is published unless every check passes.
+name: package
+on:
+  workflow_call:
+    inputs:
+      id:
+        required: true
+        type: string
+      dir:
+        required: true
+        type: string
+      binary-crate:
+        required: true
+        type: string
+      arches:
+        required: false
+        type: string
+        default: armhf
+      licence-file:
+        required: false
+        type: string
+        default: LICENSE
+      install-file:
+        required: false
+        type: string
+        default: INSTALL.md
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: The build repo's packager
+        uses: actions/checkout@v5
+        with:
+          repository: DoanNguyenTrong/kindle-primitive-build
+          ref: v1
+          path: .build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install jsonschema==4.26.0
+      - name: The tag matches the version
+        run: |
+          v=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          test "refs/tags/v$v" = "$GITHUB_REF" || { echo "tag $GITHUB_REF does not match Cargo.toml version $v"; exit 1; }
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-unknown-linux-musleabihf
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - uses: goto-bus/setup-zig@v2
+        with:
+          version: 0.13.0
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Build each architecture and stage it
+        run: |
+          for arch in $(echo "${{ inputs.arches }}" | tr ',' ' '); do
+            cargo zigbuild --release --locked -p "${{ inputs.binary-crate }}" --target armv7-unknown-linux-musleabihf
+            sh scripts/stage.sh "$arch"
+            python3 -I .build/scripts/package.py --id "${{ inputs.id }}" --dir "${{ inputs.dir }}" --version "$VERSION" \
+              --arch "$arch" --stage build/stage --license "${{ inputs.licence-file }}" \
+              --install "${{ inputs.install-file }}" --out dist
+          done
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --title "${{ inputs.id }} $VERSION" --notes-file CHANGELOG.md || \
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
