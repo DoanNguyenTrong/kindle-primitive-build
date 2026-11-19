@@ -1,14 +1,4 @@
-# The shared release workflow for Primitive Store apps. An app calls it on a `v*` tag:
-#
-#   on: { push: { tags: ["v*"] } }
-#   jobs:
-#     release:
-#       uses: DoanNguyenTrong/kindle-primitive-build/.github/workflows/package.yml@v1
-#       with: { id: primitive-notes, dir: notes, binary-crate: kn-kindle, arches: armhf }
-#       permissions: { contents: write }
-#
-# The app's own scripts/stage.sh must put the installed files in build/stage (see the build repo's README). The tag must
-# equal the version in Cargo.toml. Nothing is published unless every check passes.
+# Called by app release workflows on v* tags.
 name: package
 on:
   workflow_call:
@@ -23,64 +13,139 @@ on:
         required: true
         type: string
       arches:
-        required: false
         type: string
         default: armhf
+      firmware-min:
+        type: string
+        default: "5.16.3"
       licence-file:
-        required: false
         type: string
         default: LICENSE
+      docs-licence-file:
+        type: string
+        default: ""
       install-file:
-        required: false
         type: string
         default: INSTALL.md
+      changelog-file:
+        type: string
+        default: CHANGELOG.md
+      legacy-usb:
+        type: boolean
+        default: false
+      sibling-tools-ref:
+        type: string
+        default: ""
+    secrets:
+      package-scan-patterns:
+        description: "Optional regular expressions, one per line, to reject in package contents."
+        required: false
 jobs:
   package:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      APP_ID: ${{ inputs.id }}
+      APP_DIR: ${{ inputs.dir }}
+      BINARY_CRATE: ${{ inputs.binary-crate }}
+      ARCHES: ${{ inputs.arches }}
+      FIRMWARE_MIN: ${{ inputs.firmware-min }}
+      LICENCE_FILE: ${{ inputs.licence-file }}
+      DOCS_LICENCE_FILE: ${{ inputs.docs-licence-file }}
+      INSTALL_FILE: ${{ inputs.install-file }}
+      CHANGELOG_FILE: ${{ inputs.changelog-file }}
     steps:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
-      - name: The build repo's packager
+          persist-credentials: false
+      - name: Check out the packager at the workflow revision
         uses: actions/checkout@v5
         with:
-          repository: DoanNguyenTrong/kindle-primitive-build
-          ref: v1
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .build
+          persist-credentials: false
+      - name: Check out the native app kit
+        if: inputs.sibling-tools-ref != ''
+        uses: actions/checkout@v5
+        with:
+          repository: DoanNguyenTrong/kindle-primtitive-tools
+          ref: ${{ inputs.sibling-tools-ref }}
+          path: .tools-source
+          persist-credentials: false
+      - name: Make the app kit available as a sibling folder
+        if: inputs.sibling-tools-ref != ''
+        run: ln -sT "$GITHUB_WORKSPACE/.tools-source" "$GITHUB_WORKSPACE/../doannt-kindle-tools"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install jsonschema==4.26.0
-      - name: The tag matches the version
-        run: |
-          v=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
-          test "refs/tags/v$v" = "$GITHUB_REF" || { echo "tag $GITHUB_REF does not match Cargo.toml version $v"; exit 1; }
-          echo "VERSION=$v" >> "$GITHUB_ENV"
+      - run: python3 -m pip install jsonschema==4.26.0
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: mlugg/setup-zig@v2
         with:
-          targets: armv7-unknown-linux-musleabihf
+          version: 0.17.1
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-zigbuild
-      - uses: goto-bus/setup-zig@v2
-        with:
-          version: 0.13.0
-      - name: Test
-        run: cargo test --workspace --locked
-      - name: Build each architecture and stage it
+          tool: cargo-zigbuild@0.24.1
+      - name: Check the release tag and target architectures
+        env:
+          LEGACY_USB: ${{ inputs.legacy-usb }}
         run: |
-          for arch in $(echo "${{ inputs.arches }}" | tr ',' ' '); do
-            cargo zigbuild --release --locked -p "${{ inputs.binary-crate }}" --target armv7-unknown-linux-musleabihf
-            sh scripts/stage.sh "$arch"
-            python3 -I .build/scripts/package.py --id "${{ inputs.id }}" --dir "${{ inputs.dir }}" --version "$VERSION" \
-              --arch "$arch" --stage build/stage --license "${{ inputs.licence-file }}" \
-              --install "${{ inputs.install-file }}" --out dist
+          version=$(cargo metadata --locked --no-deps --format-version 1 | jq -er --arg crate "$BINARY_CRATE" '
+            [.packages[] | select(.name == $crate) | .version] | if length == 1 then .[0] else error("expected one binary crate") end')
+          test "$GITHUB_REF" = "refs/tags/v$version" || { echo "Tag must be v$version"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          read -r -a arches <<< "${ARCHES//,/ }"
+          test "${#arches[@]}" -gt 0 || { echo "Specify at least one architecture"; exit 1; }
+          declare -A targets
+          for arch in "${arches[@]}"; do
+            case "$arch" in
+              armhf) target=armv7-unknown-linux-musleabihf ;;
+              armel) target=armv7-unknown-linux-musleabi ;;
+              *) echo "Unsupported Kindle architecture"; exit 1 ;;
+            esac
+            test -z "${targets[$arch]:-}" || { echo "Duplicate architecture $arch"; exit 1; }
+            targets[$arch]=$target
+            echo "$arch $target" >> "$RUNNER_TEMP/primitive-targets"
           done
+          if [[ "$LEGACY_USB" == true && -z "${targets[armhf]:-}" ]]; then
+            echo "The legacy USB package requires an armhf build"
+            exit 1
+          fi
+          rustup target add "${targets[@]}"
+      - name: Test
+        run: |
+          cargo test --workspace --locked
+          if [ -f tests/supervisor-test.sh ]; then sh tests/supervisor-test.sh; fi
+      - name: Build and stage each architecture
+        run: |
+          while read -r arch target; do
+            cargo zigbuild --release --locked -p "$BINARY_CRATE" --target "$target"
+            sh scripts/stage.sh "$arch"
+            mv build/stage "$RUNNER_TEMP/primitive-stage-$arch"
+          done < "$RUNNER_TEMP/primitive-targets"
+      - name: Scan and package the staged files
+        env:
+          PACKAGE_SCAN_PATTERNS: ${{ secrets.package-scan-patterns || vars.PACKAGE_SCAN_PATTERNS }}
+        run: |
+          args=()
+          if [[ -n "$DOCS_LICENCE_FILE" ]]; then args+=(--docs-license "$DOCS_LICENCE_FILE"); fi
+          while read -r arch _; do
+            python3 -I .build/scripts/package.py --id "$APP_ID" --dir "$APP_DIR" --version "$VERSION" \
+              --arch "$arch" --stage "$RUNNER_TEMP/primitive-stage-$arch" --firmware-min "$FIRMWARE_MIN" \
+              --license "$LICENCE_FILE" --install "$INSTALL_FILE" --out dist "${args[@]}"
+          done < "$RUNNER_TEMP/primitive-targets"
+      - name: Build the legacy USB package
+        if: inputs.legacy-usb
+        run: sh scripts/package-release.sh
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --title "${{ inputs.id }} $VERSION" --notes-file CHANGELOG.md || \
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "$APP_ID $VERSION" --notes-file "$CHANGELOG_FILE"
