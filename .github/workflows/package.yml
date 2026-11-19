@@ -36,6 +36,10 @@ on:
       sibling-tools-ref:
         type: string
         default: ""
+      sibling-launcher-ref:
+        description: "Launcher revision providing the fonts used by native app tests."
+        type: string
+        default: ""
     secrets:
       package-scan-patterns:
         description: "Optional regular expressions, one per line, to reject in package contents."
@@ -81,6 +85,17 @@ jobs:
       - name: Make the app kit available as a sibling folder
         if: inputs.sibling-tools-ref != ''
         run: ln -sT "$GITHUB_WORKSPACE/.tools-source" "$GITHUB_WORKSPACE/../doannt-kindle-tools"
+      - name: Check out fonts for native app tests
+        if: inputs.sibling-launcher-ref != ''
+        uses: actions/checkout@v5
+        with:
+          repository: DoanNguyenTrong/kindle-primitive-launcher
+          ref: ${{ inputs.sibling-launcher-ref }}
+          path: .launcher-source
+          persist-credentials: false
+      - name: Make Launcher available as a sibling folder
+        if: inputs.sibling-launcher-ref != ''
+        run: ln -sT "$GITHUB_WORKSPACE/.launcher-source" "$GITHUB_WORKSPACE/../doannt-kindle-launcher"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
