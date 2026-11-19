@@ -26,6 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCHEMA = os.path.join(os.path.dirname(HERE), "schema", "manifest.schema.json")
 RESERVED = {"documents", "extensions", "system", "fonts", "screensaver", "koreader"}
 HOOKS = {"hooks/post-install.sh", "hooks/pre-uninstall.sh"}
+MAX_HOOK_BYTES = 64 * 1024
 MAX_PACKAGE_BYTES = 200 * 1024 * 1024
 MAX_FILES = 5000
 
@@ -148,8 +149,15 @@ def main(argv):
             raise SystemExit(f"{f} is outside the places an app may use ({args.dir}/, documents/, extensions/{args.dir}/)")
     installed = [f for f in files if not f.startswith("hooks/")]
     hooks = [f for f in files if f.startswith("hooks/")]
-    if "hooks/post-install.sh" in hooks and "hooks/pre-uninstall.sh" not in hooks:
-        raise SystemExit("Add hooks/pre-uninstall.sh to undo the changes made by hooks/post-install.sh")
+    if hooks and set(hooks) != HOOKS:
+        raise SystemExit("Declare both hooks/post-install.sh and hooks/pre-uninstall.sh so Store changes can be reversed")
+    if hooks and (args.id in {"primitive-launcher", "primitive-store"} or args.dir in {"launcher", "store"}):
+        raise SystemExit("Launcher and Store use their dedicated update paths")
+    for name in hooks:
+        with open(os.path.join(args.stage, name), "rb") as script:
+            contents = script.read(MAX_HOOK_BYTES + 1)
+        if not 0 < len(contents) <= MAX_HOOK_BYTES or b"\0" in contents:
+            raise SystemExit(f"{name}: expected a nonempty shell script of at most {MAX_HOOK_BYTES} bytes")
 
     requires = {}
     for item in args.requires:
