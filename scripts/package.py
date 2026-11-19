@@ -109,7 +109,9 @@ def main(argv):
         z.write(args.install, f"{top}/INSTALL.md")
         for f in installed + hooks:
             info = zipfile.ZipInfo(f"{top}/{f}")
-            info.external_attr = (stat.S_IFREG | 0o644) << 16
+            # Programs and library entries are executable; everything else is a plain file.
+            executable = f.endswith(".sh") or "/bin/" in f or os.path.basename(f) in ("kb-kindle", "kl-launcher")
+            info.external_attr = (stat.S_IFREG | (0o755 if executable else 0o644)) << 16
             info.compress_type = zipfile.ZIP_DEFLATED
             with open(os.path.join(args.stage, f), "rb") as src:
                 z.writestr(info, src.read())
