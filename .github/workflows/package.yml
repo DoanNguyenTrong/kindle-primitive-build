@@ -78,7 +78,7 @@ jobs:
         if: inputs.sibling-tools-ref != ''
         uses: actions/checkout@v5
         with:
-          repository: DoanNguyenTrong/kindle-primtitive-tools
+          repository: PrimitiveOS/kindle-primtitive-tools
           ref: ${{ inputs.sibling-tools-ref }}
           path: .tools-source
           persist-credentials: false
@@ -89,7 +89,7 @@ jobs:
         if: inputs.sibling-launcher-ref != ''
         uses: actions/checkout@v5
         with:
-          repository: DoanNguyenTrong/kindle-primitive-launcher
+          repository: PrimitiveOS/kindle-primitive-launcher
           ref: ${{ inputs.sibling-launcher-ref }}
           path: .launcher-source
           persist-credentials: false
